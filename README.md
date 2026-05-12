@@ -1,3 +1,35 @@
+# ArtemKyslicyn/LLM.swift (Agent07 fork)
+
+Downstream fork of `haldihealth/LLM.swift` (itself a fork of `eastriverlee/LLM.swift` with Sentinel-project modifications). Used by [Agent07](https://github.com/ArtemKyslicyn/Agent07) — visual AI agent orchestration for macOS.
+
+### Agent07 Fork Modifications
+
+- **llama.xcframework** bumped to upstream `ggml-org/llama.cpp` release **b9113** (2026-05-11). See [`CHANGELOG.md`](CHANGELOG.md) for per-bump audit: backward-compat verification, list of new C-API surface available but not yet wrapped, and removed-upstream symbols (none of which affect this binding).
+- xcframework ships **without** dSYM bundles and `DebugSymbolsPath` entries (carries forward `12d2315` + `81a618d` strips). Net size: ~620 MB → ~51 MB. The strip pattern is re-applied on every llama.cpp bump (see workflow below).
+- Public Swift API (`LLM` actor, `getCompletion`, `respond`, `Generatable`/`LLMMacros`, `ChatTemplate` enum) is intact across bumps — downstream consumers don't need to change call sites.
+
+### Maintenance workflow (bump llama.cpp)
+
+```sh
+# 1. Pull the latest xcframework release from ggml-org/llama.cpp
+bash update.sh
+
+# 2. Re-strip dSYM + DebugSymbolsPath (release re-introduces both)
+rm -rf llama.cpp/llama.xcframework/*/dSYMs
+for i in 0 1 2 3 4 5 6; do
+    plutil -remove "AvailableLibraries.$i.DebugSymbolsPath" \
+        llama.cpp/llama.xcframework/Info.plist 2>/dev/null || true
+done
+
+# 3. Confirm Swift bindings still compile
+swift build
+
+# 4. Update CHANGELOG.md with new build tag + llama.h symbol churn
+# 5. Optionally tag: git tag -a v2026.5.12-b9113 -m '…'
+```
+
+---
+
 # haldihealth/LLM.swift (Sentinel Custom Fork)
 
 This is a custom fork built specifically for the **Sentinel** project to support the MedGemma-4B model in the Kaggle Impact Competition. 
