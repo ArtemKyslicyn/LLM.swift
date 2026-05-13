@@ -165,8 +165,14 @@ public actor LLMCore {
         // pre-allocates 5+ GB of compute/KV scratch at init time on big-vocab
         // MoE models (35B-A3B). Cap n_batch at min(n_ctx, default) so we
         // don't request more than llama.cpp's own default capacity (2048).
-        let defaultNBatch = contextParams.n_batch
-        contextParams.n_batch = min(contextParams.n_ctx, defaultNBatch)
+        // Note: n_batch MUST be >= max prompt size in tokens, otherwise
+        // llama_decode trips GGML_ASSERT(n_tokens_all <= cparams.n_batch).
+        // prepareContext() in this file submits the full prompt in one
+        // llama_decode call, so n_batch must equal n_ctx to support
+        // prompts up to the full context window. The compute-buffer cost
+        // this incurs in b9113+ is real (~3-4 GB on 16K ctx) but the
+        // alternative is chunked-decode which we haven't implemented.
+        contextParams.n_batch = contextParams.n_ctx
         contextParams.n_threads = processorCount
         contextParams.n_threads_batch = processorCount
         contextParams.embeddings = true
