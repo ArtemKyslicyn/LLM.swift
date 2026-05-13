@@ -1359,14 +1359,28 @@ open class LLM: ObservableObject {
         print("GNERATING WITH SEEED: \(seed)")
         #endif
         var modelParams = llama_model_default_params()
+        print("[LLM-DIAG] llama_model_default_params() raw:")
+        print("    n_gpu_layers (default) = \(modelParams.n_gpu_layers)")
+        print("    use_mmap               = \(modelParams.use_mmap)")
+        print("    use_mlock              = \(modelParams.use_mlock)")
+        print("    check_tensors          = \(modelParams.check_tensors)")
+        print("    split_mode (raw)       = \(modelParams.split_mode.rawValue)")
         #if targetEnvironment(simulator)
         modelParams.n_gpu_layers = 0
         #else
-        modelParams.n_gpu_layers = gpuLayers 
+        modelParams.n_gpu_layers = gpuLayers
         #endif
+        print("[LLM-DIAG] modelParams AFTER Swift overrides:")
+        print("    n_gpu_layers           = \(modelParams.n_gpu_layers) (requested gpuLayers=\(gpuLayers))")
+        print("    use_mmap               = \(modelParams.use_mmap)")
+        print("    use_mlock              = \(modelParams.use_mlock)")
+        let modelLoadStart = Date()
         guard let model = llama_model_load_from_file(self.path, modelParams) else {
+            print("[LLM-DIAG] llama_model_load_from_file FAILED after \(String(format: "%.2f", Date().timeIntervalSince(modelLoadStart)))s")
             return nil
         }
+        let modelLoadDt = Date().timeIntervalSince(modelLoadStart)
+        print("[LLM-DIAG] llama_model_load_from_file OK in \(String(format: "%.2f", modelLoadDt))s")
         self.model = model
         
         let finalMaxTokenCount = Int(min(maxTokenCount, llama_model_n_ctx_train(model)))
