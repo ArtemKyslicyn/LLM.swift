@@ -159,7 +159,14 @@ public actor LLMCore {
 
         let processorCount = Int32(ProcessInfo().processorCount)
         contextParams.n_ctx = UInt32(maxTokenCount)
-        contextParams.n_batch = contextParams.n_ctx
+        // n_batch was previously set to n_ctx, which was effectively free
+        // under older llama.cpp builds (compute buffer was sized by n_ubatch).
+        // Under b9113 the prealloc scales with n_batch, so a 16K n_ctx
+        // pre-allocates 5+ GB of compute/KV scratch at init time on big-vocab
+        // MoE models (35B-A3B). Cap n_batch at min(n_ctx, default) so we
+        // don't request more than llama.cpp's own default capacity (2048).
+        let defaultNBatch = contextParams.n_batch
+        contextParams.n_batch = min(contextParams.n_ctx, defaultNBatch)
         contextParams.n_threads = processorCount
         contextParams.n_threads_batch = processorCount
         contextParams.embeddings = true
