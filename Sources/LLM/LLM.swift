@@ -129,6 +129,34 @@ public actor LLMCore {
         self.totalTokenCount = Int(llama_vocab_n_tokens(vocab))
         
         var contextParams = llama_context_default_params()
+
+        // ────── DIAG-B9113-MEM (REMOVE AFTER INVESTIGATION) ──────
+        // Print defaults provided by llama.cpp BEFORE Swift-side overrides.
+        // Used to diagnose the 35B-A3B memory regression after the b9113
+        // xcframework bump (Agent07 KILL-SWITCH at 2 GB available).
+        let defs = contextParams
+        print("""
+        [LLM-DIAG] llama_context_default_params() raw:
+            n_ctx                = \(defs.n_ctx)
+            n_batch              = \(defs.n_batch)
+            n_ubatch             = \(defs.n_ubatch)
+            n_seq_max            = \(defs.n_seq_max)
+            n_threads            = \(defs.n_threads)
+            n_threads_batch      = \(defs.n_threads_batch)
+            flash_attn_type      = \(defs.flash_attn_type.rawValue)
+            pooling_type         = \(defs.pooling_type.rawValue)
+            attention_type       = \(defs.attention_type.rawValue)
+            embeddings           = \(defs.embeddings)
+            offload_kqv          = \(defs.offload_kqv)
+            no_perf              = \(defs.no_perf)
+            type_k               = \(defs.type_k.rawValue)
+            type_v               = \(defs.type_v.rawValue)
+        [LLM-DIAG] capabilities:
+            supports_mmap        = \(llama_supports_mmap())
+            supports_mlock       = \(llama_supports_mlock())
+            supports_gpu_offload = \(llama_supports_gpu_offload())
+        """)
+
         let processorCount = Int32(ProcessInfo().processorCount)
         contextParams.n_ctx = UInt32(maxTokenCount)
         contextParams.n_batch = contextParams.n_ctx
@@ -136,10 +164,31 @@ public actor LLMCore {
         contextParams.n_threads_batch = processorCount
         contextParams.embeddings = true
         self.params = contextParams
-        
+
+        print("""
+        [LLM-DIAG] params AFTER Swift overrides (about to call llama_init_from_model):
+            maxTokenCount        = \(maxTokenCount)
+            n_ctx                = \(contextParams.n_ctx)
+            n_batch              = \(contextParams.n_batch)
+            n_ubatch             = \(contextParams.n_ubatch)
+            embeddings           = \(contextParams.embeddings)
+            n_threads            = \(contextParams.n_threads)
+            type_k               = \(contextParams.type_k.rawValue)
+            type_v               = \(contextParams.type_v.rawValue)
+            flash_attn_type      = \(contextParams.flash_attn_type.rawValue)
+        [LLM-DIAG] vocab/model summary:
+            n_embd               = \(llama_model_n_embd(model))
+            n_ctx_train          = \(llama_model_n_ctx_train(model))
+            n_tokens (vocab)     = \(llama_vocab_n_tokens(vocab))
+        """)
+
+        let _initStart = Date()
         guard let context = llama_init_from_model(model, params) else {
+            print("[LLM-DIAG] llama_init_from_model returned NIL after \(String(format: "%.2fs", -_initStart.timeIntervalSinceNow))")
             throw LLMError.contextCreationFailed
         }
+        print("[LLM-DIAG] llama_init_from_model OK in \(String(format: "%.2fs", -_initStart.timeIntervalSinceNow))")
+        // ────── END DIAG-B9113-MEM ──────
         self.context = context
         
         self.batch = llama_batch_init(Int32(maxTokenCount), 0, 1)
