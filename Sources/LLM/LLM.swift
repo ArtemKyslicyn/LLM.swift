@@ -69,6 +69,10 @@ public actor LLMCore {
     private var shouldContinuePredicting = false
     private var currentTokenCount: Int32 = 0
     private var debugLastGeneratedTokens: [Token] = []
+
+    // Prompt-cache (prefix-KV reuse) — opt-in, default off.
+    private var promptCacheEnabled = false
+    private var cachedTokens: [Token] = []
     
     private var sampler: UnsafeMutablePointer<llama_sampler>?
     
@@ -270,24 +274,76 @@ public actor LLMCore {
     
     func prepareContext(for input: String) -> Bool {
         guard !input.isEmpty else { return false }
-        
+
         tokenBuffer.removeAll()
-        
+
         var tokens = encode(input)
         if tokens.last == nullToken { tokens.removeLast() }
-        
+
         let initialCount = tokens.count
+        guard initialCount > 0 else { return false }
+
+        // Prompt-cache (opt-in): reuse the KV for the longest common prefix with
+        // the previously prefilled prompt; prefill only the new suffix. Default
+        // path below is unchanged.
+        if promptCacheEnabled {
+            return prepareContextCached(tokens)
+        }
+
         guard maxTokenCount > initialCount + Int(currentTokenCount) else { return false }
-        
+
         clearBatch()
         for (i, token) in tokens.enumerated() {
             addToBatch(token: token, pos: currentTokenCount + Int32(i), isLogit: i == initialCount - 1)
         }
         guard llama_decode(context, batch) == 0 else { return false }
-        
+
         currentTokenCount += Int32(initialCount)
         shouldContinuePredicting = true
         return true
+    }
+
+    /// Prefix-KV reuse: keep KV for the common prefix with the last prompt, drop
+    /// the divergent tail (and any previously generated tokens), prefill only the
+    /// new suffix, and reset the position to match. Produces output identical to a
+    /// from-scratch prefill of the same prompt (verified in tests), but skips
+    /// re-prefilling the shared prefix (e.g. a stable system prompt across turns).
+    private func prepareContextCached(_ tokens: [Token]) -> Bool {
+        let count = tokens.count
+        guard maxTokenCount > count else { return false }
+        // Cap the reused prefix at count-1 so at least the last token is decoded
+        // fresh to produce logits for sampling.
+        var prefix = commonPrefixLength(cachedTokens, tokens)
+        if prefix > count - 1 { prefix = count - 1 }
+        if prefix < 0 { prefix = 0 }
+        // Drop KV at positions >= prefix (divergent suffix + any generated tail).
+        llama_memory_seq_rm(llama_get_memory(context), 0, Int32(prefix), -1)
+        currentTokenCount = Int32(prefix)
+        clearBatch()
+        for i in prefix..<count {
+            addToBatch(token: tokens[i], pos: Int32(i), isLogit: i == count - 1)
+        }
+        guard llama_decode(context, batch) == 0 else {
+            resetContext()   // failure → clean state so the next call is correct
+            return false
+        }
+        currentTokenCount = Int32(count)
+        cachedTokens = tokens
+        shouldContinuePredicting = true
+        return true
+    }
+
+    private func commonPrefixLength(_ a: [Token], _ b: [Token]) -> Int {
+        let n = min(a.count, b.count)
+        var i = 0
+        while i < n && a[i] == b[i] { i += 1 }
+        return i
+    }
+
+    /// Enable/disable prompt-cache (prefix-KV reuse). Disabling clears the cache.
+    func setPromptCacheEnabled(_ enabled: Bool) {
+        promptCacheEnabled = enabled
+        if !enabled { cachedTokens = [] }
     }
     
     private func clearBatch() {
@@ -376,6 +432,7 @@ public actor LLMCore {
         currentTokenCount = 0
         tokenBuffer.removeAll()
         shouldContinuePredicting = false
+        cachedTokens = []
         // Clear all sequences to ensure clean state
         llama_memory_seq_rm(llama_get_memory(context), -1, -1, -1)
     }
@@ -1549,6 +1606,15 @@ open class LLM: ObservableObject {
         output.yield("TL;DR")
     }
     
+    /// Enable prompt-cache (prefix-KV reuse) for lower latency when consecutive
+    /// `getCompletion` calls share a long prefix (e.g. a stable system prompt in
+    /// an agentic loop). Opt-in; output is identical to the default path. Use
+    /// `reset()` to clear the cache. Awaitable so callers can sequence it before
+    /// the first completion.
+    public func setPromptCacheEnabled(_ enabled: Bool) async {
+        await core.setPromptCacheEnabled(enabled)
+    }
+
     public func getCompletion(from input: borrowing String) async -> String {
         guard isAvailable else { return "LLM is being used" }
         
