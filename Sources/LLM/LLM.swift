@@ -341,7 +341,19 @@ public actor LLMCore {
     }
 
     /// Enable/disable prompt-cache (prefix-KV reuse). Disabling clears the cache.
+    /// Recurrent/hybrid-memory models (Mamba/RWKV and hybrids like some 27B+ Qwen)
+    /// keep a recurrent STATE rather than a positional KV cache, so partial
+    /// `llama_memory_seq_rm` is invalid there and aborts (GGML_ASSERT). On such
+    /// models we silently keep the cache OFF → the safe default full-prefill path.
     func setPromptCacheEnabled(_ enabled: Bool) {
+        if enabled {
+            let model = llama_get_model(context)
+            if llama_model_is_recurrent(model) || llama_model_is_hybrid(model) {
+                promptCacheEnabled = false
+                cachedTokens = []
+                return
+            }
+        }
         promptCacheEnabled = enabled
         if !enabled { cachedTokens = [] }
     }
