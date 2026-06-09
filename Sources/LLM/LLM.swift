@@ -119,7 +119,7 @@ public actor LLMCore {
         llama_sampler_chain_add(sampler!, llama_sampler_init_dist(seed))
     }
     
-    public init(model: Model, path: [CChar], seed: UInt32, topK: Int32, topP: Float, temp: Float, repeatPenalty: Float, repetitionLookback: Int32, maxTokenCount: Int) throws {
+    public init(model: Model, path: [CChar], seed: UInt32, topK: Int32, topP: Float, temp: Float, repeatPenalty: Float, repetitionLookback: Int32, maxTokenCount: Int, kvCacheQuantized: Bool = false) throws {
         LLM.ensureInitialized()
         self.model = model
         self.vocab = llama_model_get_vocab(model)
@@ -180,6 +180,18 @@ public actor LLMCore {
         contextParams.n_threads = processorCount
         contextParams.n_threads_batch = processorCount
         contextParams.embeddings = true
+
+        // KV-cache quantization (opt-in; default keeps f16 = prior behavior).
+        // Q8_0 K+V ≈ near-lossless and roughly halves KV-cache RAM — the binding
+        // constraint for large windows on memory-limited machines (e.g. 32B@16384
+        // peaked ~22.6 GB on a 36 GB box, most of it KV). V-cache quantization
+        // requires Flash Attention, so enable it together. Standard llama.cpp
+        // "-ctk q8_0 -ctv q8_0 -fa on" recipe expressed in-process.
+        if kvCacheQuantized {
+            contextParams.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_ENABLED
+            contextParams.type_k = GGML_TYPE_Q8_0
+            contextParams.type_v = GGML_TYPE_Q8_0
+        }
         self.params = contextParams
 
         print("""
@@ -1417,7 +1429,8 @@ open class LLM: ObservableObject {
         repeatPenalty: Float = 1.2,
         repetitionLookback: Int32 = 64,
         historyLimit: Int = 8,
-        maxTokenCount: Int32 = 2048
+        maxTokenCount: Int32 = 2048,
+        kvCacheQuantized: Bool = false
     ) {
         LLM.silenceLogging()
         self.path = path.cString(using: .utf8)!
@@ -1470,9 +1483,10 @@ open class LLM: ObservableObject {
                 temp: temp,
                 repeatPenalty: repeatPenalty,
                 repetitionLookback: repetitionLookback,
-                maxTokenCount: finalMaxTokenCount
+                maxTokenCount: finalMaxTokenCount,
+                kvCacheQuantized: kvCacheQuantized
             )
-            
+
             if let stopSequence {
                 Task {
                     await core.setStopSequence(stopSequence)
@@ -1496,7 +1510,8 @@ open class LLM: ObservableObject {
         repeatPenalty: Float = 1.2,
         repetitionLookback: Int32 = 64,
         historyLimit: Int = 8,
-        maxTokenCount: Int32 = 2048
+        maxTokenCount: Int32 = 2048,
+        kvCacheQuantized: Bool = false
     ) {
         self.init(
             from: url.path,
@@ -1510,7 +1525,8 @@ open class LLM: ObservableObject {
             repeatPenalty: repeatPenalty,
             repetitionLookback: repetitionLookback,
             historyLimit: historyLimit,
-            maxTokenCount: maxTokenCount
+            maxTokenCount: maxTokenCount,
+            kvCacheQuantized: kvCacheQuantized
         )
     }
     
@@ -1526,7 +1542,8 @@ open class LLM: ObservableObject {
         repeatPenalty: Float = 1.2,
         repetitionLookback: Int32 = 64,
         historyLimit: Int = 8,
-        maxTokenCount: Int32 = 2048
+        maxTokenCount: Int32 = 2048,
+        kvCacheQuantized: Bool = false
     ) {
         self.init(
             from: url.path,
@@ -1540,7 +1557,8 @@ open class LLM: ObservableObject {
             repeatPenalty: repeatPenalty,
             repetitionLookback: repetitionLookback,
             historyLimit: historyLimit,
-            maxTokenCount: maxTokenCount
+            maxTokenCount: maxTokenCount,
+            kvCacheQuantized: kvCacheQuantized
         )
         self.preprocess = template.preprocess
         self.template = template
@@ -1559,6 +1577,7 @@ open class LLM: ObservableObject {
         repetitionLookback: Int32 = 64,
         historyLimit: Int = 8,
         maxTokenCount: Int32 = 2048,
+        kvCacheQuantized: Bool = false,
         updateProgress: @Sendable @escaping (Double) -> Void = { print(String(format: "downloaded(%.2f%%)", $0 * 100)) }
     ) async throws {
         let url = try await huggingFaceModel.download(to: url, as: name) { progress in
@@ -1575,7 +1594,8 @@ open class LLM: ObservableObject {
             repeatPenalty: repeatPenalty,
             repetitionLookback: repetitionLookback,
             historyLimit: historyLimit,
-            maxTokenCount: maxTokenCount
+            maxTokenCount: maxTokenCount,
+            kvCacheQuantized: kvCacheQuantized
         )
         await setupThinkingTokens(from: huggingFaceModel.template)
     }
