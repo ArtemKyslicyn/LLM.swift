@@ -1,12 +1,34 @@
 # ArtemKyslicyn/LLM.swift (Agent07 fork)
 
-Downstream fork of `haldihealth/LLM.swift` (itself a fork of `eastriverlee/LLM.swift` with Sentinel-project modifications). Used by [Agent07](https://github.com/ArtemKyslicyn/Agent07) — visual AI agent orchestration for macOS.
+A **maintained fork of an unmaintained project.** Upstream [`eastriverlee/LLM.swift`](https://github.com/eastriverlee/LLM.swift) — a small, readable Swift binding over [`llama.cpp`](https://github.com/ggml-org/llama.cpp) for on-device LLM inference — is no longer actively maintained; its embedded `llama.xcframework` was frozen at a long-stale `llama.cpp` checkpoint. This fork exists to **keep the binding current with modern libraries** and add a few targeted improvements for [Agent07](https://github.com/ArtemKyslicyn/Agent07) — visual AI agent orchestration for macOS.
 
-### Agent07 Fork Modifications
+**Lineage:**
+`eastriverlee/LLM.swift` (original — *unmaintained*)
+→ `haldihealth/LLM.swift` (Sentinel fork — added token streaming, chain-of-thought "thinking" separation, `gpuLayers`)
+→ **`ArtemKyslicyn/LLM.swift`** (this fork — modernised `llama.cpp` + opt-in latency/memory levers).
 
-- **llama.xcframework** bumped to upstream `ggml-org/llama.cpp` release **b9113** (2026-05-11). See [`CHANGELOG.md`](CHANGELOG.md) for per-bump audit: backward-compat verification, list of new C-API surface available but not yet wrapped, and removed-upstream symbols (none of which affect this binding).
-- xcframework ships **without** dSYM bundles and `DebugSymbolsPath` entries (carries forward `12d2315` + `81a618d` strips). Net size: ~620 MB → ~51 MB. The strip pattern is re-applied on every llama.cpp bump (see workflow below).
-- Public Swift API (`LLM` actor, `getCompletion`, `respond`, `Generatable`/`LLMMacros`, `ChatTemplate` enum) is intact across bumps — downstream consumers don't need to change call sites.
+The full upstream usage documentation is preserved verbatim further down this file.
+
+> **TL;DR** — same public Swift API as upstream, but compiled against a **current** (2026-06-09) `llama.cpp`, shipped as a slimmed binary, with a couple of opt-in performance levers. It's a drop-in replacement: existing call sites don't change.
+
+### What this fork changes
+
+**Updated with current libraries**
+- **`llama.xcframework` bumped to a modern `ggml-org/llama.cpp` build.** Upstream shipped a long-stale checkpoint; this fork tracks recent releases. `main` is on **b9113** (2026-05-11); the branch Agent07 actually consumes — `feature/llamacpp-b9581`, pinned at revision **`f18156a`** — is on **b9581** (2026-06-09, latest at time of writing). Every bump is audited for backward-compatibility in [`CHANGELOG.md`](CHANGELOG.md) (symbol churn, new C-API surface available but not yet wrapped, removed-upstream symbols — none of which affect this binding).
+- **Slimmed binary.** The xcframework ships **without** dSYM bundles / `DebugSymbolsPath` entries (carries forward the `12d2315` + `81a618d` strips, re-applied on every bump). Net size ~620 MB → ~51 MB — keeps checkouts clean on case-sensitive filesystems and validation-strict Xcode setups.
+
+**Inherited fork features** (from the haldihealth/Sentinel fork, carried forward and kept compiling)
+- Real-time **token streaming** with public streaming methods.
+- **Chain-of-thought "thinking" separation** — `generateResponseStreamWithThinking` (made public) splits `<think>` reasoning from the visible answer for reasoning models.
+- **`gpuLayers`** control for partial GPU offload (CPU/GPU layer split on memory-constrained machines).
+
+**Small improvements added in this fork** ("чуть допилено")
+- **Opt-in prompt-cache** (prefix-KV reuse) for lower-latency multi-turn chat; safely no-ops on recurrent / hybrid-memory models. *(on the `feature/llamacpp-b9581` line)*
+- **Opt-in KV-cache quantization** (Q8_0 K+V + flash-attn) to cut context memory on long sessions. *(same line)*
+- **`n_batch` memory-regression fix** after the llama.cpp bump — cap `n_batch` at the llama default instead of `n_ctx` (the b9113 bump otherwise regressed base memory and tripped kill-switches on 30B+ models).
+- Public Swift API (`LLM` actor, `getCompletion`, `Generatable`/`LLMMacros`, `ChatTemplate` enum, `gpuLayers`) kept **stable across all bumps** — downstream consumers never have to change call sites.
+
+> **On pinning.** Agent07 pins this fork **by revision** (`f18156a`), not by a tag, because the binding pins `llama.cpp` by binary build rather than semver. `main` (b9113) is the conservative line; `feature/llamacpp-b9581` (b9581 + the two opt-in levers) is what's in production. The opt-in levers default **off**, so the bump caused no behavioural change for existing consumers.
 
 ### Maintenance workflow (bump llama.cpp)
 
